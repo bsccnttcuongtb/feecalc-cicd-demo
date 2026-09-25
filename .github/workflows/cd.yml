@@ -40,7 +40,7 @@ jobs:
           dotnet publish src/FeeCalc.Api -c Release -o out
           -p:InformationalVersion=${{ steps.ver.outputs.version }}+${GITHUB_SHA::7}
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: feecalc-${{ steps.ver.outputs.version }}
           path: out
@@ -58,7 +58,7 @@ jobs:
         with:
           sparse-checkout: deploy   # chỉ cần script deploy, không cần mã nguồn
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: feecalc-${{ needs.build.outputs.version }}
           path: pkg
@@ -86,7 +86,7 @@ jobs:
         with:
           sparse-checkout: deploy
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: feecalc-${{ needs.build.outputs.version }}
           path: pkg
