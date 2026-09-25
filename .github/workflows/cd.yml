@@ -1,0 +1,96 @@
+# CD: chạy khi có code mới trên main (tức là sau khi PR được merge).
+# Build MỘT lần -> cùng một gói đó lên UAT -> người duyệt bấm Approve -> lên PROD.
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # cho phép bấm tay trên tab Actions
+
+concurrency:
+  group: cd
+  cancel-in-progress: false   # không bao giờ huỷ giữa chừng một lần deploy
+
+env:
+  # Thư mục giả lập máy chủ. Máy chủ thật: đổi thành đường dẫn trên VM, hoặc thay bước deploy bằng SSH/WinRM.
+  DEPLOY_ROOT: ${{ vars.DEPLOY_ROOT || 'F:\GITHUB\cicd\servers' }}
+
+jobs:
+  build:
+    name: Build + đóng gói
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Đặt số phiên bản
+        id: ver
+        run: echo "version=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Test lại trên đúng commit sẽ deploy
+        run: dotnet test -c Release
+
+      - name: Publish
+        run: >
+          dotnet publish src/FeeCalc.Api -c Release -o out
+          -p:InformationalVersion=${{ steps.ver.outputs.version }}+${GITHUB_SHA::7}
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: feecalc-${{ steps.ver.outputs.version }}
+          path: out
+          retention-days: 30
+
+  deploy-uat:
+    name: Deploy UAT
+    needs: build
+    runs-on: [self-hosted, windows, bsc-demo]   # runner cài trong mạng nội bộ, là máy duy nhất chạm được máy chủ
+    environment:
+      name: uat
+      url: http://localhost:5081
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: deploy   # chỉ cần script deploy, không cần mã nguồn
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: feecalc-${{ needs.build.outputs.version }}
+          path: pkg
+
+      - name: Deploy
+        shell: pwsh
+        run: ./deploy/deploy.ps1 -PackageDir pkg -ServerRoot "$env:DEPLOY_ROOT\uat" -Port 5081 -Version ${{ needs.build.outputs.version }} -EnvName UAT
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $r = Invoke-RestMethod "http://127.0.0.1:5081/api/fee?value=10000000&channel=Counter" -NoProxy
+          Write-Host ($r | ConvertTo-Json -Compress)
+          if ($r.fee -ne 25000) { throw "Sai phí: $($r.fee)" }
+
+  deploy-prod:
+    name: Deploy PROD
+    needs: [build, deploy-uat]
+    runs-on: [self-hosted, windows, bsc-demo]
+    environment:
+      name: production          # có cấu hình "Required reviewers" -> job dừng chờ người duyệt
+      url: http://localhost:5082
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: deploy
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: feecalc-${{ needs.build.outputs.version }}
+          path: pkg
+
+      - name: Deploy
+        shell: pwsh
+        run: ./deploy/deploy.ps1 -PackageDir pkg -ServerRoot "$env:DEPLOY_ROOT\prod" -Port 5082 -Version ${{ needs.build.outputs.version }} -EnvName Production

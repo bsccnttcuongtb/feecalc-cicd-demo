@@ -1,0 +1,43 @@
+# CI: chạy mỗi khi push lên nhánh feature/hotfix và mỗi khi mở / cập nhật Pull Request vào main.
+# Mục tiêu: code lỗi không bao giờ được merge vào main.
+name: CI
+
+on:
+  push:
+    branches: ['feature/**', 'hotfix/**', 'bugfix/**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true   # push liên tiếp thì huỷ lần chạy cũ, chỉ giữ lần mới nhất
+
+jobs:
+  build-test:
+    name: Build + Test
+    runs-on: ubuntu-latest   # máy ảo GitHub cấp, dùng xong xoá — CI không cần đụng máy chủ nội bộ
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Kiểm tra định dạng code
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore -warnaserror
+
+      - name: Unit test
+        run: dotnet test -c Release --no-build --logger trx --results-directory TestResults
+
+      - name: Lưu kết quả test
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-results
+          path: TestResults
